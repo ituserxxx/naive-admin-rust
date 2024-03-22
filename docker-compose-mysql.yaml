@@ -8,7 +8,7 @@ services:
     ports:
       - "33069:3306"
     volumes:
-      - /data/docker/project/rust_axum_web_api_demo/mysql:/var/lib/mysql
+      - /data/docker/project/naive-admin-rust/mysql:/var/lib/mysql
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     environment:
       - TZ=Asia/Shanghai
