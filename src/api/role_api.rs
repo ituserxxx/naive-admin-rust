@@ -62,3 +62,12 @@ pub struct RoleAddUserReq {
     #[allow(non_snake_case)]
     pub userIds: Vec<i64>,
 }
+
+#[derive(Debug, Clone, Validate, Default, Deserialize, Serialize)]
+pub struct RoleAddReq {
+    pub enable: bool,
+    pub name: String,
+    pub code: String,
+    #[allow(non_snake_case)]
+    pub permissionIds: Option<Vec<i64>>,
+}

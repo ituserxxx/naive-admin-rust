@@ -90,12 +90,11 @@ pub async fn delete_user_roles_by_user_id(
     Ok(())
 }
 
-
 // 取消绑定角色的用户 (这里是直接操作 user_roles_role，不需要加事务)
 pub async fn delete_user_roles_by_user_role_id(
     pool: &mut Transaction<'_, MySql>,
-    userId:i64,
-    role_id:i64,
+    userId: i64,
+    role_id: i64,
 ) -> Result<u64, sqlx::Error> {
     let result = sqlx::query("delete from user_roles_role where userId = ? and roleId=?")
         .bind(userId)

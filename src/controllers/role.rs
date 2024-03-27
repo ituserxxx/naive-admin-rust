@@ -1,20 +1,20 @@
-use axum::{
-    extract::{Extension, Json, Path, Query, Request},
-    middleware::{self, Next},
-};
-use chrono::Utc;
-use std::rc::Rc;
-use validator::Validate;
-use sqlx::MySqlPool;
 use crate::tools;
 use crate::{
     api::resp::ApiResponse,
     api::{comm_api, role_api, user_api},
     db::{
         permission_model, profile_model, role_model, role_permissions_permission, user_model,
-        user_roles_role_model,DB_POOL
+        user_roles_role_model, DB_POOL,
     },
 };
+use axum::{
+    extract::{Extension, Json, Path, Query, Request},
+    middleware::{self, Next},
+};
+use chrono::Utc;
+use sqlx::MySqlPool;
+use std::rc::Rc;
+use validator::Validate;
 
 // 所有角色
 pub async fn all(
@@ -25,6 +25,76 @@ pub async fn all(
         Err(err) => Json(ApiResponse::err(&format!("获取所有权限失败:{:?}", err))),
     };
 }
+
+// 新增角色
+pub async fn add_role(Json(req): Json<role_api::RoleAddReq>) -> Json<ApiResponse<String>> {
+    if let Err(error) = req.validate() {
+        return Json(ApiResponse::new(400, None, &format!("{}", error)));
+    }
+
+    let pool = DB_POOL
+        .lock()
+        .unwrap()
+        .as_ref()
+        .expect("DB pool not initialized")
+        .clone();
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(err) => return Json(ApiResponse::err(&format!("开启事务失败:{:?}", err))),
+    };
+    let add_data = role_model::Role {
+        id: 0,
+        code: req.code,
+        name: req.name,
+        enable: req.enable as i64,
+    };
+    let new_role_id = match role_model::add_by_struct(&mut tx, add_data.clone()).await {
+        Ok(id) => id,
+        Err(err) => {
+            if let Err(rollback_err) = tx.rollback().await {
+                return Json(ApiResponse::err(&format!(
+                    "事务回滚失败: {:?}",
+                    rollback_err
+                )));
+            }
+            return Json(ApiResponse::err(&format!("新角色失败:{:?}", err)));
+        }
+    };
+    if let Some(pmids) = req.permissionIds {
+        // 新增角色-资源权限关联
+        for pmid in pmids {
+            let add_data = role_permissions_permission::RolePermissionsPermission {
+                permissionId: pmid,
+                roleId: new_role_id as i64,
+            };
+            match role_permissions_permission::add_role_permissions_by_struct(
+                &mut tx,
+                add_data.clone(),
+            )
+            .await
+            {
+                Ok(_) => {}
+                Err(err) => {
+                    if let Err(rollback_err) = tx.rollback().await {
+                        return Json(ApiResponse::err(&format!(
+                            "事务回滚失败: {:?}",
+                            rollback_err
+                        )));
+                    }
+                    return Json(ApiResponse::err(&format!(
+                        "新增角色-资源权限失败:{:?}",
+                        err
+                    )));
+                }
+            };
+        }
+    }
+    if let Err(commit_err) = tx.commit().await {
+        return Json(ApiResponse::err(&format!("事务提交失败: {:?}", commit_err)));
+    }
+    return Json(ApiResponse::succ(Some("ok".to_string())));
+}
+
 // 当前用户权限树
 pub async fn permissions_tree(
     Extension(curr_user): Extension<comm_api::CurrentUser>,
@@ -217,19 +287,16 @@ pub async fn patch_role(
         Err(err) => return Json(ApiResponse::err(&format!("开启事务失败:{:?}", err))),
     };
     // 修改 role 表
-    let role_data = role_model::Role{
+    let role_data = role_model::Role {
         id,
-        code:req.code.unwrap_or(String::new()),
-        name:req.name.unwrap_or(String::new()),
-        enable:req.enable as i64,
+        code: req.code.unwrap_or(String::new()),
+        name: req.name.unwrap_or(String::new()),
+        enable: req.enable as i64,
     };
-    match role_model::update_role_by_struct(&mut tx,role_data.clone()).await {
+    match role_model::update_role_by_struct(&mut tx, role_data.clone()).await {
         Ok(_) => {}
         Err(err) => {
-            return Json(ApiResponse::err(&format!(
-                "修改角色信息失败:{:?}",
-                err
-            )));
+            return Json(ApiResponse::err(&format!("修改角色信息失败:{:?}", err)));
         }
     };
     // 角色-资源关系表（先删后增)
@@ -242,17 +309,25 @@ pub async fn patch_role(
                     rollback_err
                 )));
             }
-            return Json(ApiResponse::err(&format!("删除角色-资源权限失败:{:?}", err)));
+            return Json(ApiResponse::err(&format!(
+                "删除角色-资源权限失败:{:?}",
+                err
+            )));
         }
     };
-    if let Some(pmids) = req.permissionIds{
+    if let Some(pmids) = req.permissionIds {
         // 新增角色-资源权限关联
         for pmid in pmids {
             let add_data = role_permissions_permission::RolePermissionsPermission {
                 permissionId: pmid as i64,
                 roleId: id,
             };
-            match role_permissions_permission::add_role_permissions_by_struct(&mut tx, add_data.clone()).await {
+            match role_permissions_permission::add_role_permissions_by_struct(
+                &mut tx,
+                add_data.clone(),
+            )
+            .await
+            {
                 Ok(_) => {}
                 Err(err) => {
                     if let Err(rollback_err) = tx.rollback().await {
@@ -261,7 +336,10 @@ pub async fn patch_role(
                             rollback_err
                         )));
                     }
-                    return Json(ApiResponse::err(&format!("新增角色-资源权限失败:{:?}", err)));
+                    return Json(ApiResponse::err(&format!(
+                        "新增角色-资源权限失败:{:?}",
+                        err
+                    )));
                 }
             };
         }
@@ -274,11 +352,11 @@ pub async fn patch_role(
 }
 
 // 角色绑定用户
-pub async  fn add_user(
+pub async fn add_user(
     Extension(curr_user): Extension<comm_api::CurrentUser>,
     Path(id): Path<i64>,
     Json(req): Json<role_api::RoleAddUserReq>,
-)-> Json<ApiResponse<String>>{
+) -> Json<ApiResponse<String>> {
     if let Err(error) = req.validate() {
         return Json(ApiResponse::new(400, None, &format!("{}", error)));
     }
@@ -292,7 +370,7 @@ pub async  fn add_user(
         Ok(tx) => tx,
         Err(err) => return Json(ApiResponse::err(&format!("开启事务失败:{:?}", err))),
     };
-    for uid in req.userIds{
+    for uid in req.userIds {
         let add_data = user_roles_role_model::UserRolesRole {
             userId: uid,
             roleId: id,
@@ -317,11 +395,11 @@ pub async  fn add_user(
 }
 
 // 角色取消绑定用户
-pub async  fn remove_user(
+pub async fn remove_user(
     Extension(curr_user): Extension<comm_api::CurrentUser>,
     Path(id): Path<i64>,
     Json(req): Json<role_api::RoleAddUserReq>,
-)-> Json<ApiResponse<String>>{
+) -> Json<ApiResponse<String>> {
     if let Err(error) = req.validate() {
         return Json(ApiResponse::new(400, None, &format!("{}", error)));
     }
@@ -335,12 +413,12 @@ pub async  fn remove_user(
         Ok(tx) => tx,
         Err(err) => return Json(ApiResponse::err(&format!("开启事务失败:{:?}", err))),
     };
-    for uid in req.userIds{
+    for uid in req.userIds {
         let add_data = user_roles_role_model::UserRolesRole {
             userId: uid,
             roleId: id,
         };
-        match user_roles_role_model::delete_user_roles_by_user_role_id(&mut tx,uid,id).await {
+        match user_roles_role_model::delete_user_roles_by_user_role_id(&mut tx, uid, id).await {
             Ok(_) => {}
             Err(err) => {
                 if let Err(rollback_err) = tx.rollback().await {
@@ -353,6 +431,56 @@ pub async  fn remove_user(
             }
         };
     }
+    if let Err(commit_err) = tx.commit().await {
+        return Json(ApiResponse::err(&format!("事务提交失败: {:?}", commit_err)));
+    }
+    return Json(ApiResponse::succ(Some("ok".to_string())));
+}
+
+// 新增角色
+pub async fn delete_role( Path(id): Path<i64>,) -> Json<ApiResponse<String>> {
+    let pool = DB_POOL
+        .lock()
+        .unwrap()
+        .as_ref()
+        .expect("DB pool not initialized")
+        .clone();
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(err) => return Json(ApiResponse::err(&format!("开启事务失败:{:?}", err))),
+    };
+
+    match role_model::delete_role_by_id(&mut tx, id).await {
+        Ok(_) => {}
+        Err(err) => {
+            if let Err(rollback_err) = tx.rollback().await {
+                return Json(ApiResponse::err(&format!(
+                    "事务回滚失败: {:?}",
+                    rollback_err
+                )));
+            }
+            return Json(ApiResponse::err(&format!(
+                "删除角色失败:{:?}",
+                err
+            )));
+        }
+    };
+    // 删除角色-资源关系表
+    match role_permissions_permission::delete_permissions_by_role_id(&mut tx, id).await {
+        Ok(_) => {}
+        Err(err) => {
+            if let Err(rollback_err) = tx.rollback().await {
+                return Json(ApiResponse::err(&format!(
+                    "事务回滚失败: {:?}",
+                    rollback_err
+                )));
+            }
+            return Json(ApiResponse::err(&format!(
+                "删除角色-资源权限失败:{:?}",
+                err
+            )));
+        }
+    };
     if let Err(commit_err) = tx.commit().await {
         return Json(ApiResponse::err(&format!("事务提交失败: {:?}", commit_err)));
     }

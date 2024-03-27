@@ -122,12 +122,10 @@ pub async fn update_enable_by_id(enable: bool, id: i64) -> Result<MySqlQueryResu
     // MySqlQueryResult { rows_affected: 1, last_insert_id: 3 }
 }
 
-
-
 // 更新 Role
 pub async fn update_role_by_struct(
     pool: &mut Transaction<'_, MySql>,
-    data: Role
+    data: Role,
 ) -> Result<bool, sqlx::Error> {
     let pool = DB_POOL
         .lock()
@@ -145,4 +143,36 @@ pub async fn update_role_by_struct(
         .await?;
     let rows_aff = result.rows_affected();
     Ok(rows_aff > 0)
+}
+
+
+// 新增角色（需要加事务，所以 pool 从外面传进来）
+pub async fn add_by_struct(
+    pool: &mut Transaction<'_, MySql>,
+    data: Role,
+) -> Result<u64, sqlx::Error> {
+    let insert_sql = "INSERT INTO role (code, name, enable) VALUES (?, ?, ?)";
+    let result = sqlx::query(&insert_sql)
+        .bind(&data.code)
+        .bind(&data.name)
+        .bind(&data.enable)
+        .execute(pool)
+        .await?;
+    // 获取新插入记录的 id
+    let new_id = result.last_insert_id();
+    Ok(new_id)
+}
+
+// 删除角色-通过 id (需要加事务，所以 pool 从外面传进来)
+pub async fn delete_role_by_id(
+    pool: &mut Transaction<'_, MySql>,
+    id: i64,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("delete from role where id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    // MySqlQueryResult { rows_affected: 1, last_insert_id: 0 }
+    let rows_affected = result.rows_affected();
+    Ok(rows_affected == 1)
 }
