@@ -33,3 +33,4 @@ async fn main() {
     // 关闭数据库连接
     let _ = db::mysql_disconnect().await;
 }
+
